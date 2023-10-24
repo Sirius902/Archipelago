@@ -936,18 +936,13 @@ def get_payload(ctx: KH2Context) -> str:
 
 
 async def parse_payload(payload: dict, ctx: KH2Context) -> None:
-    if ctx.auth:
-        ctx.deathlink_enabled = False
-        ctx.deathlink_client_override = False
-        ctx.deathlink_pending = False
-        # TODO: I don't know if this is correct for KH2.
-        await ctx.send_connect()
-        return
-
     # Turn on deathlink if it is on, and if the client hasn't overriden it
     if payload['deathlinkActive'] and not ctx.deathlink_enabled and not ctx.deathlink_client_override:
         await ctx.update_death_link(True)
         ctx.deathlink_enabled = True
+
+    if 'isDead' not in payload:
+        return
 
     # Deathlink handling
     if ctx.deathlink_enabled:
