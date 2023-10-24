@@ -31,8 +31,7 @@ Payload: lua -> client
 
 Payload: client -> lua
 {
-    playerNames: list,
-    triggerDeath: bool
+    triggerDeath: bool,
 }
 
 Deathlink logic:
@@ -932,7 +931,6 @@ def get_payload(ctx: KH2Context) -> str:
         trigger_death = False
 
     return json.dumps({
-        "playerNames": [name for (i, name) in ctx.player_names.items() if i != 0],
         "triggerDeath": trigger_death,
     })
 
