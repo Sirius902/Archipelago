@@ -1,8 +1,11 @@
 import os
 import asyncio
+from asyncio import StreamReader, StreamWriter
+from typing import Optional, Tuple
 import ModuleUpdate
 import json
 import Utils
+from Utils import async_start
 from pymem import pymem
 from worlds.kh2.Items import exclusionItem_table, CheckDupingItems
 from worlds.kh2 import all_locations, item_dictionary_table, exclusion_table
@@ -10,6 +13,35 @@ from worlds.kh2 import all_locations, item_dictionary_table, exclusion_table
 from worlds.kh2.WorldLocations import *
 
 from worlds import network_data_package
+
+
+CONNECTION_TIMING_OUT_STATUS = "Connection timing out. Please restart scripts"
+CONNECTION_REFUSED_STATUS = "Connection refused. Please start your scripts"
+CONNECTION_RESET_STATUS = "Connection was reset. Please restart your scripts"
+CONNECTION_TENTATIVE_STATUS = "Initial Connection Made"
+CONNECTION_CONNECTED_STATUS = "Connected"
+CONNECTION_INITIAL_STATUS = "Connection has not been initiated"
+
+"""
+Payload: lua -> client
+{
+    deathlinkActive: bool,
+    isDead: bool,
+}
+
+Payload: client -> lua
+{
+    playerNames: list,
+    triggerDeath: bool
+}
+
+Deathlink logic:
+"Dead" is true <-> Player is at 0 hp.
+
+deathlink_pending: we need to kill the player
+deathlink_sent_this_death: we interacted with the multiworld on this death, waiting to reset with living player
+
+"""
 
 if __name__ == "__main__":
     Utils.init_logging("KH2Client", exception_logger="Client")
@@ -23,13 +55,35 @@ ModuleUpdate.update()
 kh2_loc_name_to_id = network_data_package["games"]["Kingdom Hearts 2"]["location_name_to_id"]
 
 
-# class KH2CommandProcessor(ClientCommandProcessor):
+class KH2CommandProcessor(ClientCommandProcessor):
+    def __init__(self, ctx): 
+        super().__init__(ctx)
+
+    def _cmd_dlstat(self):
+        """Check deathlink Connection State"""
+        if isinstance(self.ctx, KH2Context):
+            logger.info(f"Deathlink Status: {self.ctx.lua_status}")
+
+    def _cmd_deathlink(self):
+        """Toggle deathlink from client. Overrides default setting."""
+        if isinstance(self.ctx, KH2Context):
+            self.ctx.deathlink_client_override = True
+            self.ctx.deathlink_enabled = not self.ctx.deathlink_enabled
+            async_start(self.ctx.update_death_link(self.ctx.deathlink_enabled), name="Update Deathlink")
 
 
 class KH2Context(CommonContext):
-    # command_processor: int = KH2CommandProcessor
+    command_processor = KH2CommandProcessor
     game = "Kingdom Hearts 2"
     items_handling = 0b101  # Indicates you get items sent from other worlds.
+
+    deathlink_enabled = False
+    deathlink_pending = False
+    deathlink_client_override = False
+    deathlink_sent_this_death = False
+    deathlink_sync_task: Optional["asyncio.Task[None]"] = None
+    lua_streams: Optional[Tuple[StreamReader, StreamWriter]] = None
+    lua_status = CONNECTION_INITIAL_STATUS
 
     def __init__(self, server_address, password):
         super(KH2Context, self).__init__(server_address, password)
@@ -776,6 +830,10 @@ class KH2Context(CommonContext):
                 self.kh2connected = False
             logger.info(e)
 
+    def on_deathlink(self, data: typing.Dict[str, typing.Any]) -> None:
+        self.deathlink_pending = True
+        super().on_deathlink(data)
+
 
 def finishedGame(ctx: KH2Context, message):
     if ctx.kh2slotdata['FinalXemnas'] == 1:
@@ -866,6 +924,104 @@ async def kh2_watcher(ctx: KH2Context):
         await asyncio.sleep(0.5)
 
 
+def get_payload(ctx: KH2Context) -> str:
+    if ctx.deathlink_enabled and ctx.deathlink_pending:
+        trigger_death = True
+        ctx.deathlink_sent_this_death = True
+    else:
+        trigger_death = False
+
+    return json.dumps({
+        "playerNames": [name for (i, name) in ctx.player_names.items() if i != 0],
+        "triggerDeath": trigger_death,
+    })
+
+
+async def parse_payload(payload: dict, ctx: KH2Context) -> None:
+    if ctx.auth:
+        ctx.deathlink_enabled = False
+        ctx.deathlink_client_override = False
+        ctx.deathlink_pending = False
+        # TODO: I don't know if this is correct for KH2.
+        await ctx.send_connect()
+        return
+
+    # Turn on deathlink if it is on, and if the client hasn't overriden it
+    if payload['deathlinkActive'] and not ctx.deathlink_enabled and not ctx.deathlink_client_override:
+        await ctx.update_death_link(True)
+        ctx.deathlink_enabled = True
+
+    # Deathlink handling
+    if ctx.deathlink_enabled:
+        if payload['isDead']:
+            ctx.deathlink_pending = False
+            if not ctx.deathlink_sent_this_death:
+                ctx.deathlink_sent_this_death = True
+                await ctx.send_death()
+        else:
+            ctx.deathlink_sent_this_death = False
+
+
+async def deathlink_sync_task(ctx: KH2Context) -> None:
+    logger.info("Starting KH2 Deathlink connector. Use /dlstat for status information.")
+    while not ctx.exit_event.is_set():
+        error_status = None
+        if ctx.lua_streams:
+            reader, writer = ctx.lua_streams
+            msg = get_payload(ctx).encode()
+            writer.write(msg)
+            writer.write(b'\n')
+            try:
+                await asyncio.wait_for(writer.drain(), timeout=1.5)
+                try:
+                    data = await asyncio.wait_for(reader.readline(), timeout=10)
+                    data_decoded = json.loads(data.decode())
+                    if ctx.game is not None and 'deathlinkActive' in data_decoded:
+                        async_start(parse_payload(data_decoded, ctx))
+                except asyncio.TimeoutError:
+                    logger.debug("Read Timed Out, Reconnecting")
+                    error_status = CONNECTION_TIMING_OUT_STATUS
+                    writer.close()
+                    ctx.lua_streams = None
+                except ConnectionResetError as _:
+                    logger.debug("Read failed due to Connection Lost, Reconnecting")
+                    error_status = CONNECTION_RESET_STATUS
+                    writer.close()
+                    ctx.lua_streams = None
+            except TimeoutError:
+                logger.debug("Connection Timed Out, Reconnecting")
+                error_status = CONNECTION_TIMING_OUT_STATUS
+                writer.close()
+                ctx.lua_streams = None
+            except ConnectionResetError:
+                logger.debug("Connection Lost, Reconnecting")
+                error_status = CONNECTION_RESET_STATUS
+                writer.close()
+                ctx.lua_streams = None
+            if ctx.lua_status == CONNECTION_TENTATIVE_STATUS:
+                if not error_status:
+                    logger.info("Successfully Connected to KH2 Deathlink")
+                    ctx.lua_status = CONNECTION_CONNECTED_STATUS
+                else:
+                    ctx.lua_status = f"Was tentatively connected but error occured: {error_status}"
+            elif error_status:
+                ctx.lua_status = error_status
+                logger.info("Lost connection to KH2 Deathlink and attempting to reconnect. Use /dlstat for status updates")
+        else:
+            try:
+                logger.debug("Attempting to connect to KH2 Deathlink")
+                ctx.lua_streams = await asyncio.wait_for(asyncio.open_connection("localhost", 28922), timeout=10)
+                ctx.lua_status = CONNECTION_TENTATIVE_STATUS
+            except TimeoutError:
+                logger.debug("Connection Timed Out, Trying Again")
+                ctx.lua_status = CONNECTION_TIMING_OUT_STATUS
+                continue
+            except ConnectionRefusedError:
+                logger.debug("Connection Refused, Trying Again")
+                ctx.lua_status = CONNECTION_REFUSED_STATUS
+                continue
+
+
 if __name__ == '__main__':
     async def main(args):
         ctx = KH2Context(args.connect, args.password)
@@ -875,6 +1031,8 @@ if __name__ == '__main__':
         ctx.run_cli()
         progression_watcher = asyncio.create_task(
                 kh2_watcher(ctx), name="KH2ProgressionWatcher")
+
+        ctx.deathlink_sync_task = asyncio.create_task(deathlink_sync_task(ctx), name="Deathlink Sync")
 
         await ctx.exit_event.wait()
         ctx.server_address = None
