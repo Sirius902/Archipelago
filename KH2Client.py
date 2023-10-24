@@ -32,6 +32,7 @@ Payload: lua -> client
 Payload: client -> lua
 {
     triggerDeath: bool,
+    mostRecentDeath: float,
 }
 
 Deathlink logic:
@@ -932,6 +933,7 @@ def get_payload(ctx: KH2Context) -> str:
 
     return json.dumps({
         "triggerDeath": trigger_death,
+        "mostRecentDeath": ctx.last_death_link,
     })
 
 
