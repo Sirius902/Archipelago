@@ -960,7 +960,10 @@ async def parse_payload(payload: dict, ctx: KH2Context) -> None:
             ctx.deathlink_pending = False
             if not ctx.deathlink_sent_this_death:
                 ctx.deathlink_sent_this_death = True
-                await ctx.send_death(f"{ctx.player_names[ctx.slot]}{random.choice(DEATH_MESSAGES)}")
+                if ctx.slot in ctx.player_names:
+                    await ctx.send_death(f"{ctx.player_names[ctx.slot]}{random.choice(DEATH_MESSAGES)}")
+                else:
+                    logger.warn("Player disconnected before death message was created")
         else:
             ctx.deathlink_sent_this_death = False
 
