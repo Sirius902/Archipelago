@@ -9,6 +9,7 @@ from Utils import async_start
 from pymem import pymem
 from worlds.kh2.Items import exclusionItem_table, CheckDupingItems
 from worlds.kh2 import all_locations, item_dictionary_table, exclusion_table
+import random
 
 from worlds.kh2.WorldLocations import *
 
@@ -21,6 +22,13 @@ CONNECTION_RESET_STATUS = "Connection was reset. Please restart your scripts"
 CONNECTION_TENTATIVE_STATUS = "Initial Connection Made"
 CONNECTION_CONNECTED_STATUS = "Connected"
 CONNECTION_INITIAL_STATUS = "Connection has not been initiated"
+
+DEATH_MESSAGES = [
+    " got norted",
+    " should've unequipped No Experience",
+    " selected Critical Mode",
+    " should've used Reflect",
+]
 
 """
 Payload: lua -> client
@@ -952,7 +960,7 @@ async def parse_payload(payload: dict, ctx: KH2Context) -> None:
             ctx.deathlink_pending = False
             if not ctx.deathlink_sent_this_death:
                 ctx.deathlink_sent_this_death = True
-                await ctx.send_death()
+                await ctx.send_death(f"{ctx.player_names[ctx.slot]}{random.choice(DEATH_MESSAGES)}")
         else:
             ctx.deathlink_sent_this_death = False
 
