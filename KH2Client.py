@@ -24,10 +24,10 @@ CONNECTION_CONNECTED_STATUS = "Connected"
 CONNECTION_INITIAL_STATUS = "Connection has not been initiated"
 
 DEATH_MESSAGES = [
-    " got norted",
-    " should've unequipped No Experience",
-    " selected Critical Mode",
-    " should've used Reflect",
+    " got norted.",
+    " should've unequipped No Experience.",
+    " selected Critical Mode.",
+    " should've used Reflect.",
 ]
 
 """
