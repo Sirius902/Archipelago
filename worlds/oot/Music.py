@@ -422,13 +422,17 @@ def randomize_music(rom, ootworld, music_mapping):
     if custom_sequences_enabled:
         if ootworld.background_music in ['randomized', 'randomized_custom_only'] or bgm_mapped:
             process_sequences(rom, sequences, target_sequences, disabled_source_sequences, disabled_target_sequences, bgm_ids)
-            if ootworld.background_music == 'randomized_custom_only':
+            # NOTE(Sirius902) Hardcoded to only use custom music.
+            # if ootworld.background_music == 'randomized_custom_only':
+            if True:
                 sequences = [seq for seq in sequences if seq.cosmetic_name not in [x[0] for x in bgm_ids] or seq.cosmetic_name in music_mapping.values()]
             sequences, log = shuffle_music(sequences, target_sequences, music_mapping, log, ootworld.random)
 
         if ootworld.fanfares in ['randomized', 'randomized_custom_only'] or ff_mapped or ocarina_mapped:
             process_sequences(rom, fanfare_sequences, fanfare_target_sequences, disabled_source_sequences, disabled_target_sequences, ff_ids, 'fanfare')
-            if ootworld.fanfares == 'randomized_custom_only':
+            # NOTE(Sirius902) Hardcoded to only use custom music.
+            # if ootworld.fanfares == 'randomized_custom_only':
+            if True:
                 fanfare_sequences = [seq for seq in fanfare_sequences if seq.cosmetic_name not in [x[0] for x in fanfare_sequence_ids] or seq.cosmetic_name in music_mapping.values()]
             fanfare_sequences, log = shuffle_music(fanfare_sequences, fanfare_target_sequences, music_mapping, log, ootworld.random)
 
